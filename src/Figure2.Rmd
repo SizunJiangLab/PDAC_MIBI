@@ -1,0 +1,117 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+pacman::p_load(tidyverse, forcats, ggpubr, tidytext, circlize, ComplexHeatmap, scales, patchwork)
+
+source('helpers/heatmap_functions.R')
+source('helpers/palettes.R')
+```
+
+```{r}
+annots <- read_csv('data/annotations.csv')
+mdata <- read_csv('data/mdata_cleaned.csv')
+```
+
+##### == FIGURE 2 ==
+### Figure 2A Example ROI with cell type calling
+
+### Figure 2B celltype annotation heatmap
+
+```{r}
+pdf('Figure2B.pdf', width = 6, height = 11)
+
+draw_zheatmap(annots, phenotyping_markers, 'cellType') %v% 
+  draw_zheatmap(annots, functional_markers, 'cellType')
+
+dev.off()
+```
+
+### Figure 2C Celltype logfc enrichment (relapse+/-)
+
+```{r}
+p <- annots %>%
+  left_join(mdata[, c('Patient', 'Relapse')]) %>%
+  group_by(path, cellType, Relapse) %>%
+  summarise(n = n(), .groups = 'drop') %>%
+  group_by(cellType, Relapse) %>%
+  summarise(mean_n = mean(n), .groups = 'drop') %>%
+  pivot_wider(names_from = Relapse, values_from = mean_n) %>%
+  mutate(across(everything(), ~replace(., is.na(.), 0))) %>%
+  pivot_longer(-c(cellType), names_to = 'Relapse', values_to = 'n') %>%
+  group_by(cellType) %>%
+  dplyr::mutate(total_n = sum(n)) %>%
+  dplyr::mutate(diff = log2((n/total_n) / (first(n)/first(total_n)))) %>%
+  dplyr::filter(!Relapse == 'N') %>%
+  ggplot(aes(x = reorder(cellType, diff), y = diff, fill = cellType)) +
+    geom_col() +
+    geom_rect(aes(xmin = 0, ymin = 0, xmax = Inf, ymax = Inf), fill = 'darkorange2', alpha = 0.02) +
+    geom_rect(aes(xmin = 0, ymin = -Inf, xmax = Inf, ymax = 0), fill = 'lightsteelblue', alpha = 0.02) +
+    scale_fill_manual(values = annot_palette, guide = 'none') +
+    annotate('text', x = 4, y = 0.9, label = 'Relapse+', size = 10) +
+    annotate('text', x = 13, y = -0.9, label = 'Relapse-', size = 10) +
+    labs(x = 'Cell Type', y = 'Log2 Fold Enrichment', title = 'Cell Type Enrichment (Relapse+/Relapse-)') + 
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+          axis.title.x = element_blank())
+
+ggsave('Figure2C.pdf', p, device = 'pdf', width = 6, height = 4)
+
+# significance
+celltype_proportions <- annots %>%
+  left_join(mdata[, c('Patient', 'Relapse')]) %>%
+  group_by(PointNum, Relapse) %>%
+  mutate(total_cells = n()) %>%
+  group_by(PointNum, cellType, Relapse, total_cells) %>%
+  summarise(
+    count = n(),
+    proportion = count / total_cells,
+    .groups = 'drop'
+  )
+
+wilcox_results <- celltype_proportions %>%
+  group_by(cellType) %>%
+  do(test = wilcox.test(proportion ~ Relapse, data = .)) %>%
+  mutate(
+    p_value = test$p.value,
+    p_text = case_when(
+      p_value < 0.001 ~ "***",
+      p_value < 0.01 ~ "**",
+      p_value < 0.05 ~ "*",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  select(cellType, p_value, p_text)
+
+print(wilcox_results)
+
+```
+
+### Figure 2D cell type frequency by patient
+
+```{r}
+# infiltration
+p <- annots %>% 
+  group_by(PointNum, Patient, cellType) %>%
+  summarise(n = n(), .groups = 'drop') %>%
+  group_by(PointNum, Patient) %>%
+  dplyr::mutate(freq = n / sum(n)) %>%
+  ungroup() %>%
+  left_join(mdata[, c('Patient', 'Relapse')]) %>%
+  ggplot(aes(x = reorder_within(PointNum, freq, cellType), y = freq, fill = Relapse)) +
+  geom_col(alpha = 0.8) +
+  scale_x_reordered() +
+  scale_fill_manual(values = relapse_palette, guide = 'none') +
+  facet_wrap(~cellType, scales = 'free', ncol = 8) +
+  theme_bw() +
+  coord_flip() +
+  theme(axis.title.x = element_blank(),
+        axis.text.y = element_text(size = 3),
+        axis.title.y = element_blank(),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 6))
+
+ggsave('Figure2D.pdf', p, device = 'pdf', width = 12, height = 4)
+```
