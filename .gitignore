@@ -3,3 +3,5 @@
 .RData
 .Ruserdata
 PDAC_MIBI.Rproj
+src/model_fitting_cache/
+src/model_fitting_files/
