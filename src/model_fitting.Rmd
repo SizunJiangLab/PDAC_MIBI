@@ -63,7 +63,7 @@ data_neutrophil <- data %>%
 Since we want to predict the relapse status on an FOV level, we need to first summarize the data at FOV level. In order to ultilize the variation of the single cell information to the fullest extend. We will try engineer features using the following strategies and compare their performance:
 
 1. Fit model on single cell level to predict each cell's relapse/non-relapse status then give the FOV level prediction by majority-vote principle.
-2. Create FOV-level features that captures the distribution of each marker using, mean, variance, quantiles etc. 
+2. Create FOV-level features that captures the distribution of each marker such as mean, variance, quantiles, etc. However, since we only have 31 data points, we will likely just use the mean to prevent $p > n$ issue.   
 3. Using PCA to create a lower-dimensional representation of the features and use the mean PC of each FOV to build model. 
 
 In addition, we will split neutrophil into two categories --- "near tumor" and "far from tumor". The above mentioned metrics should be calculated within each group.
@@ -82,6 +82,15 @@ data_filtered <- data_neutrophil %>%
   mutate(neu_cat = ifelse(distance_um <= 25, 'near', 'far'))
 
 ```
+
+## Strategy 1
+
+```{r}
+
+
+
+```
+
 
 
 ## Strategy 2
@@ -114,6 +123,10 @@ fov_summary <- data_filtered %>%
     
     .groups = "drop"
   )
+
+fov_summary <- fov_summary %>% 
+  pivot_wider(names_from = neu_cat,
+              values_from = colnames(fov_summary)[4:44])
 
 ```
 
