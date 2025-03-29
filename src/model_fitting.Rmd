@@ -1,0 +1,12 @@
+---
+title: "Model"
+author: "Huaying Qiu"
+date: "2025-03-29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
