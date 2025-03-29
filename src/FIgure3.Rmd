@@ -1,0 +1,344 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+pacman::p_load(tidyverse, forcats, ggpubr, tidytext, circlize, ComplexHeatmap, scales, patchwork)
+
+source('helpers/heatmap_functions.R')
+source('helpers/palettes.R')
+```
+
+```{r}
+annots <- read_csv('data/annotations.csv') %>% dplyr::filter(CN != 'Other')
+mdata <- read_csv('data/mdata_cleaned.csv') # %>% 
+  # dplyr::mutate(pT = str_split(TNM_Stage, pattern = ' ', simplify = T)[,1])
+```
+
+### == FIGURE 3 ==
+### Figure 3A CN schematic
+### Figure 3B CN topic preference heatmap
+### Figure 3B_2 functional markers by CN
+```{r}
+pdf('Figure3B_2.pdf', width = 4, height = 6)
+draw_zheatmap(annots, functional_markers, 'CN', 
+              column_order = c('Neuronal', 'Immune Rich', 'Immune Suppressive', 'Endothelial', 'B Cell Enriched', 'Tumor', 'Epithelial', 'Tumor Killing'))
+dev.off()
+```
+
+### Figure 3C CN logfc enrichment (relapse+/-)
+```{r}
+p <- annots %>%
+  left_join(mdata[, c('Patient', 'Relapse')]) %>%
+  group_by(path, CN, Relapse) %>%
+  summarise(n = n(), .groups = 'drop') %>%
+  group_by(CN, Relapse) %>%
+  summarise(mean_n = mean(n), .groups = 'drop') %>%
+  pivot_wider(names_from = Relapse, values_from = mean_n) %>%
+  mutate(across(everything(), ~replace(., is.na(.), 0))) %>%
+  pivot_longer(-c(CN), names_to = 'Relapse', values_to = 'n') %>%
+  group_by(CN) %>%
+  dplyr::mutate(total_n = sum(n)) %>%
+  dplyr::mutate(diff = log2((n/total_n) / (first(n)/first(total_n)))) %>%
+  dplyr::filter(!Relapse == 'N') %>%
+  ggplot(aes(x = reorder(CN, diff), y = diff, fill = CN)) +
+    geom_col() +
+    geom_rect(aes(xmin = 0, ymin = 0, xmax = Inf, ymax = Inf), fill = 'darkorange2', alpha = 0.02) +
+    geom_rect(aes(xmin = 0, ymin = -Inf, xmax = Inf, ymax = 0), fill = 'lightsteelblue', alpha = 0.02) +
+    scale_fill_manual(values = nbhd_palette, guide = 'none') +
+    annotate('text', x = 3, y = 0.5, label = 'Relapse+', size = 10) +
+    annotate('text', x = 5, y = -0.5, label = 'Relapse-', size = 10) +
+    labs(x = 'Cell Type', y = 'Log2 Fold Enrichment', title = 'Cell Neighborhood Enrichment (Relapse+/Relapse-)') + 
+    theme_bw() +
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+          axis.title.x = element_blank())
+
+ggsave('Figure3C.pdf', p, device = 'pdf', width = 6, height = 4)
+
+# significance
+nbhd_proportions <- annots %>%
+  left_join(mdata[, c('Patient', 'Relapse')]) %>%
+  group_by(PointNum, Relapse) %>%
+  mutate(total_cells = n()) %>%
+  group_by(PointNum, CN, Relapse, total_cells) %>%
+  summarise(
+    count = n(),
+    proportion = count / total_cells,
+    .groups = 'drop'
+  )
+
+wilcox_results <- nbhd_proportions %>%
+  group_by(CN) %>%
+  do(test = wilcox.test(proportion ~ Relapse, data = .)) %>%
+  mutate(
+    p_value = test$p.value,
+    p_text = case_when(
+      p_value < 0.001 ~ "***",
+      p_value < 0.01 ~ "**",
+      p_value < 0.05 ~ "*",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  select(CN, p_value, p_text)
+
+print(wilcox_results)
+
+```
+
+
+### Figure 3D closest neighborhoods to tumor nbhd
+```{r}
+results <- data.frame()
+
+for (fov in unique(annots$PointNum)) {
+  cat('Processing: ', fov, '\n')
+  fov_data <- annots %>% dplyr::filter(PointNum == fov)
+  pt_id <- fov_data$Patient[1]
+  
+  tumor_cells <- fov_data %>% dplyr::filter(CN == 'Tumor') %>% dplyr::select(Y_cent, X_cent)
+  if (nrow(tumor_cells) == 0) next
+  
+  other_nbhds <- setdiff(unique(fov_data$CN), 'Tumor')
+  
+  for (nbhd in other_nbhds) {
+    nbhd_cells <- fov_data %>% dplyr::filter(CN == nbhd) %>% dplyr::select(Y_cent, X_cent)
+    
+    dist_x <- outer(tumor_cells$X_cent, nbhd_cells$X_cent, "-")^2
+    dist_y <- outer(tumor_cells$Y_cent, nbhd_cells$Y_cent, "-")^2
+    distances <- sqrt(dist_x + dist_y)
+    
+    min_distances <- apply(distances, 1, min)
+    
+    results <- rbind(results, data.frame(
+      PointNum = fov,
+      patient = pt_id,
+      nbhd = nbhd,
+      median_min_dist = median(min_distances),
+      mean_min_dist = mean(min_distances)
+    ))
+  }
+}
+
+nbhd_summary <- results %>%
+  dplyr::mutate(median_min_dist_um = 0.78 * median_min_dist) %>%
+  group_by(nbhd) %>%
+  summarise(median_dist = median(median_min_dist_um, na.rm = TRUE),
+            q25 = quantile(median_min_dist_um, 0.25, na.rm = TRUE),
+            q75 = quantile(median_min_dist_um, 0.75, na.rm = TRUE),
+            n = n()) %>%
+  arrange(median_dist)
+
+p <- ggplot(nbhd_summary, aes(x = median_dist, y = reorder(nbhd, median_dist, decreasing = T))) +
+  geom_errorbarh(aes(xmin = q25, xmax = q75), height = 0.2) +
+  geom_point(aes(fill = nbhd), pch = 21, size = 4) +
+  scale_fill_manual(values = nbhd_palette) +
+  labs(title = 'Distance from Tumor Cells to \nClosest Neighborhood Cells',
+       x = 'Median Distance (um)',
+       y = element_blank()) +
+  guides(fill = 'none') +
+  theme_bw()
+
+ggsave('Figure3D.pdf', p, device = 'pdf', width = 4, height = 2)
+```
+
+### Figure 3E interface length
+```{r}
+library(deldir)
+
+calculate_interface <- function(fov_id, data) {
+  fov_data <- data %>% filter(PointNum == fov_id)
+  patient_id <- fov_data$Patient[1]
+  
+  if(nrow(fov_data) < 10) return(NULL)
+  
+  all_points <- fov_data %>% select(X_cent, Y_cent, CN)
+  if(nrow(all_points) < 4) return(NULL)
+  
+  all_points$point_id <- 1:nrow(all_points)
+  
+  # delaunay triangulation
+  tri <- deldir(all_points$X_cent, all_points$Y_cent)
+  edges <- tri$delsgs
+  
+  points_df <- data.frame(
+    ind = 1:nrow(all_points),
+    CN = all_points$CN
+  )
+  
+  interface_counts <- data.frame()
+  
+  other_nbhds <- setdiff(unique(all_points$CN), 'Tumor')
+  if(!('Tumor' %in% all_points$CN)) return(NULL)
+  
+  for(nbhd in other_nbhds) {
+    interface_count <- 0
+    
+    for(i in 1:nrow(edges)) {
+      ind1 <- edges$ind1[i]
+      ind2 <- edges$ind2[i]
+      
+      type1 <- all_points$CN[ind1]
+      type2 <- all_points$CN[ind2]
+      
+      if((type1 == 'Tumor' && type2 == nbhd) ||
+         (type1 == nbhd && type2 == 'Tumor')) {
+        interface_count <- interface_count + 1
+      }
+    }
+    
+    interface_counts <- rbind(interface_counts, 
+                             data.frame(
+                               PointNum = fov_id,
+                               patient = patient_id,
+                               nbhd = nbhd,
+                               interface_count = interface_count
+                             ))
+  }
+  
+  # total number of tumor edges
+  tumor_edges <- 0
+  for(i in 1:nrow(edges)) {
+    ind1 <- edges$ind1[i]
+    ind2 <- edges$ind2[i]
+    
+    if(all_points$CN[ind1] == 'Tumor' || all_points$CN[ind2] == 'Tumor') {
+      tumor_edges <- tumor_edges + 1
+    }
+  }
+  
+  # normalize by total number of tumor edges
+  interface_counts$interface_ratio <- interface_counts$interface_count / max(tumor_edges, 1)
+  
+  return(interface_counts)
+}
+
+interface_results <- data.frame()
+
+for(fov in unique(annots$PointNum)) {
+  cat('Processing: ', fov, '\n')
+  result <- calculate_interface(fov, annots)
+  if(!is.null(result)) {
+    interface_results <- rbind(interface_results, result)
+  }
+}
+
+p <- ggplot(interface_results, aes(x = reorder(nbhd, interface_ratio, FUN = median, decreasing = T), y = interface_ratio, fill = nbhd)) +
+  geom_boxplot(outlier.alpha = 0) +
+  scale_fill_manual(values = nbhd_palette) +
+  geom_jitter(width = 0.05, alpha = 0.4, size = 1.2) +
+  labs(title = 'Tumor-Neighborhood Interface',
+       x = element_blank(),
+       y = 'Interface Proportion') +
+  theme_bw() +
+  theme(legend.position = 'none',
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))
+
+ggsave('Figure3E.pdf', p, device = 'pdf', width = 4, height = 3)
+```
+
+### Figure 3F functional marker differences at tumor-nbhd boundary
+```{r}
+library(deldir)
+
+functional_markers <- c('CD11b', 'CD15', 'CD16', 'MPO', 'CD45RA', 'CD45RO', 'HLA-DR', 'Ki67', 'PD-1', 'PD-L1')
+
+analyze_interface_markers <- function(fov_id, data, functional_markers) {
+  fov_data <- data %>% filter(PointNum == fov_id)
+  
+  if(nrow(fov_data) < 10) return(NULL)
+  
+  all_points <- fov_data %>% select(X_cent, Y_cent, CN)
+  
+  if(nrow(all_points) < 4) return(NULL)
+  
+  all_points$point_id <- 1:nrow(all_points)
+  
+  tri <- deldir(all_points$X_cent, all_points$Y_cent)
+  
+  edges <- tri$delsgs
+  
+  all_points_with_markers <- fov_data %>%
+    mutate(point_id = 1:n()) %>%
+    select(point_id, CN, all_of(functional_markers))
+  
+  interface_markers <- data.frame()
+  
+  for(i in 1:nrow(edges)) {
+    ind1 <- edges$ind1[i]
+    ind2 <- edges$ind2[i]
+    
+    type1 <- all_points$CN[ind1]
+    type2 <- all_points$CN[ind2]
+    
+    if((type1 == 'Tumor' && type2 != 'Tumor') || 
+       (type1 != 'Tumor' && type2 == 'Tumor')) {
+      
+      if(type1 != 'Tumor') {
+        non_tumor_id <- ind1
+        nbhd_type <- type1
+      } else {
+        non_tumor_id <- ind2
+        nbhd_type <- type2
+      }
+      
+      marker_values <- all_points_with_markers %>%
+        filter(point_id == non_tumor_id) %>%
+        select(all_of(functional_markers))
+      
+      interface_markers <- rbind(interface_markers, 
+                               data.frame(
+                                 PointNum = fov_id,
+                                 patient = fov_data$Patient[1],
+                                 nbhd = nbhd_type,
+                                 marker_values,
+                                 stringsAsFactors = FALSE
+                               ))
+    }
+  }
+  
+  return(interface_markers)
+}
+
+interface_marker_results <- data.frame()
+
+for(fov in unique(annots$PointNum)) {
+  cat('Processing: ', fov, '\n')
+  result <- analyze_interface_markers(fov, annots, functional_markers)
+  if(!is.null(result)) {
+    interface_marker_results <- rbind(interface_marker_results, result)
+  }
+}
+
+interface_marker_results <- interface_marker_results %>%
+  left_join(
+    mdata %>% select(Patient, Relapse),
+    by = c('patient' = 'Patient')
+  )
+
+immune_interfaces <- interface_marker_results %>%
+  filter(nbhd %in% c('Immune Rich', 'Tumor Killing'))
+
+functional_markers <- c('CD11b', 'CD15', 'CD16', 'MPO', 'CD45RA', 'CD45RO', 'HLA.DR', 'Ki67', 'PD.1', 'PD.L1')
+immune_markers_long <- immune_interfaces %>%
+  pivot_longer(cols = all_of(functional_markers),
+               names_to = 'Marker',
+               values_to = 'Expression')
+
+p <- immune_markers_long %>%
+  dplyr::mutate(Relapse = factor(Relapse, levels = c('Y', 'N'))) %>%
+  ggplot(aes(x = Relapse, y = Expression, fill = Relapse)) +
+    geom_boxplot(outlier.alpha = 0) +
+    stat_compare_means(comparisons = list(c('Y', 'N')), method = 'wilcox.test', label = 'p.signif') +
+    scale_y_continuous(expand = expansion(mult = c(0.05, 0.20))) +
+    facet_grid(nbhd ~ Marker, scales = 'free_y') +
+    scale_fill_manual(values = relapse_palette) +
+    labs(title = 'Functional Marker Expression at Tumor-Immune Interfaces',
+         x = 'Relapse Status',
+         y = 'Expression') +
+    theme_bw()
+
+ggsave('Figure3F.pdf', p, device = 'pdf', width = 10, height = 3)
+```
+

@@ -3,10 +3,178 @@ title: "Model"
 author: "Huaying Qiu"
 date: "2025-03-29"
 output: html_document
+editor_options: 
+  chunk_output_type: inline
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
+
+
+# Introduction
+
+This Rmd servers to fit models using PDAC data, mainly neutrophil features, to predict patient/FOV status.
+
+# Library
+
+
+```{r, message=FALSE, warning=FALSE}
+
+library(tidyverse)
+library(caret)
+library(glmnet)
+library(randomForest)
+library(ggcorrplot)
+library(scatterPlotMatrix)
+library(umap)
+
+```
+
+# Load data
+
+```{r, message=FALSE, warning=FALSE}
+
+data <- read_csv("~/pdac/data/All_anno_clean_metadata_Tumor distance-inf_0328.csv")
+
+```
+
+## Summary
+
+```{r, message=FALSE, warning=FALSE}
+
+summary(data)
+
+```
+
+## Subset data
+
+Previous EDA has determined that neutrophil seemed to have the largest difference between the relapse and non-relapse groups. Therefore, here we subset the data to only neutrophil.
+
+```{r}
+
+data_neutrophil <- data %>% 
+  filter(cell_cluster == 'Neutrophil')
+
+```
+
+# Feature engineering
+
+Since we want to predict the relapse status on an FOV level, we need to first summarize the data at FOV level. In order to ultilize the variation of the single cell information to the fullest extend. We will try engineer features using the following strategies and compare their performance:
+
+1. Fit model on single cell level to predict each cell's relapse/non-relapse status then give the FOV level prediction by majority-vote principle.
+2. Create FOV-level features that captures the distribution of each marker using, mean, variance, quantiles etc. 
+3. Using PCA to create a lower-dimensional representation of the features and use the mean PC of each FOV to build model. 
+
+In addition, we will split neutrophil into two categories --- "near tumor" and "far from tumor". The above mentioned metrics should be calculated within each group.
+
+Let's first define what's "near tumor" and "far from tumor":
+
+- near tumor: $d\left(N,T\right) \leq 25 \mu m$.
+- far from tumor: $d\left(N,T\right) \in \left(25, 100\right]\mu m$
+
+Note that neutrophils that are either more than $100\mu m$ away from the tumor zone or within the tumor zone, i.e., $d\left(N,T\right) < 0$, will not be considered. 
+
+```{r}
+
+data_filtered <- data_neutrophil %>% 
+  filter(distance_um <= 100 & distance_um > 0) %>% 
+  mutate(neu_cat = ifelse(distance_um <= 25, 'near', 'far'))
+
+```
+
+
+## Strategy 2
+
+```{r, message=FALSE}
+
+functional_markers <- c("CD16", "MPO", "CD45.RA", "CD45RO", "HLA.DR", "Ki.67", "PD.1", "PD.L1")
+
+fov_summary <- data_filtered %>%
+  select(fov, all_of(functional_markers), Relapse, neu_cat) %>% 
+  group_by(fov, Relapse, neu_cat) %>% 
+  summarise(
+    # Mean for each marker
+    across(all_of(functional_markers), mean, .names = "{.col}_mean"),
+    
+    # Median for each marker
+    across(all_of(functional_markers), median, .names = "{.col}_median"),
+    
+    # Standard deviation for each marker
+    across(all_of(functional_markers), sd, .names = "{.col}_std"),
+    
+    # 25th percentile
+    across(all_of(functional_markers), ~quantile(.,0.25), .names = "{.col}_q25"),
+    
+    # 75th percentile
+    across(all_of(functional_markers), ~quantile(., 0.75), .names = "{.col}_q75"),
+    
+    # cell count per fov
+    neutrophil_count = n(),
+    
+    .groups = "drop"
+  )
+
+```
+
+Now let's check the correlation of these newly created variables. And no surprise, within each marker, a lot of these metrics are highly correlated since they are different summary statistics of the same distribution. To remedy potential multicollinearity, we will fit the model using some regularization method like LASSO or elastic net. 
+
+```{r, echo=FALSE, fig.pos='center', fig.width=15, fig.height=15, cache=TRUE}
+
+categorical <- list(Relapse = c('Y', 'N'))
+
+fov_summary %>% 
+  scatterPlotMatrix(zAxisDim = 'Relapse', rotateTitle = TRUE, categoricalCS = "Set1", categorical = categorical)
+
+```
+
+## Strategy 3
+
+```{r, fig.pos='center', fig.height=15, fig.width=15}
+
+pca_matrix <- data_neutrophil %>% 
+  select(all_of(functional_markers)) %>% 
+  as.matrix()
+
+```
+
+```{r,fig.pos='center', fig.height=15, fig.width=15, echo=FALSE}
+
+pca_result <- prcomp(pca_matrix, center = TRUE, scale. = TRUE)
+
+pca_plot <- data.frame(fov = data_neutrophil$fov,
+                       relapse = factor(data_neutrophil$Relapse, levels = c("Y", "N"))) %>% 
+  cbind(as.data.frame(pca_result$x)) 
+
+pca_plot %>% 
+  ggplot(aes(x = PC1, y = PC2, color = relapse)) + 
+  geom_point(size = 0.5, alpha = 0.3) + 
+  facet_wrap(~relapse) + 
+  scale_color_brewer(palette = 'Set1') +
+  theme_bw() + 
+  theme(legend.position = "bottom")
+
+
+```
+
+
+```{r,fig.pos='center', fig.height=15, fig.width=15, echo = FALSE}
+
+pca_plot %>% 
+  ggplot(aes(x = PC1, y = PC2, color = fov)) + 
+  geom_point(size = 0.5, alpha = 0.3) + 
+  facet_wrap(~fov) + 
+  theme_bw() + 
+  theme(legend.position = "None")
+
+```
+
+
+
+
+
+
+
+
 
 

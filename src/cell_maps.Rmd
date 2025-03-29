@@ -1,0 +1,73 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+pacman::p_load(tidyverse, raster)
+
+source('helpers/palettes.R')
+source('helpers/phenotype_map.R')
+```
+
+```{r}
+# annotations
+celltype_annots <- read_csv('annotations.csv')
+nbhd_annots <- read_csv('annotations.csv')
+
+# segmentation masks
+seg_paths <- list.files('segmentation_0.78mpp_0.075maxima_0.05interior', pattern = 'MESMER_mask.tiff', full.names = T, recursive = T)
+
+seg_list <- list()
+fov_names <- list()
+
+for (i in unique(as.integer(celltype_annots$PointNum))) {
+  fov_names[[i]] <- str_split(seg_paths[[i]], '/', simplify = T)[,3]
+  seg_list[[i]] <- as.matrix(raster(seg_paths[[i]]))
+}
+
+names(seg_list) <- fov_names
+```
+
+```{r}
+celltype_palette_df <- data.frame(annot_palette) %>%
+  rownames_to_column(var = 'celltype') %>%
+  dplyr::rename(colors = annot_palette)
+
+for (i in unique(as.integer(celltype_annots$PointNum))) {
+  celltype_plot(point_num = i,
+                fov_name = unique(celltype_annots$path[celltype_annots$PointNum == i]),
+                seg_list = seg_list,
+                annotation = celltype_annots$cellType[celltype_annots$PointNum == i],
+                cell_label = celltype_annots$cellLabel[celltype_annots$PointNum == i],
+                mypalette = celltype_palette_df,
+                verbose = T,
+                out = T,
+                format = 'pdf',
+                out_path = '../pmaps_final/celltype/')
+}
+```
+
+```{r}
+nbhd_palette_df <- data.frame(nbhd_palette) %>%
+  rownames_to_column(var = 'celltype') %>%
+  dplyr::rename(colors = nbhd_palette)
+
+for (i in unique(as.integer(nbhd_annots$PointNum))) {
+  celltype_plot(point_num = i,
+                fov_name = unique(nbhd_annots$path[nbhd_annots$PointNum == i]),
+                seg_list = seg_list,
+                annotation = nbhd_annots$CN[nbhd_annots$PointNum == i],
+                cell_label = nbhd_annots$cellLabel[nbhd_annots$PointNum == i],
+                mypalette = nbhd_palette_df,
+                verbose = T,
+                out = T,
+                format = 'pdf',
+                out_path = '../pmaps_final/nbhd/')
+}
+```
+
+```{r}
+```
+
