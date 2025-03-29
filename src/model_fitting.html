@@ -12106,11 +12106,10 @@ Therefore, here we subset the data to only neutrophil.</p>
 </div>
 <div id="feature-engineering" class="section level1">
 <h1>Feature engineering</h1>
-<p>Since we want to predict the relapse status on an FOV level, we need
-to first summarize the data at FOV level. In order to ultilize the
-variation of the single cell information to the fullest extend. We will
-try engineer features using the following strategies and compare their
-performance:</p>
+<p>With the goal to predict relapse status at FOV/patient level and to
+utilize the variation of the single cell information to the fullest
+extend, we will engineer features using the following strategies and
+compare their performance:</p>
 <ol style="list-style-type: decimal">
 <li>Fit model on single cell level to predict each cell’s
 relapse/non-relapse status then give the FOV level prediction by
