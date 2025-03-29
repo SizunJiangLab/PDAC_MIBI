@@ -83,16 +83,6 @@ data_filtered <- data_neutrophil %>%
 
 ```
 
-## Strategy 1
-
-```{r}
-
-
-
-```
-
-
-
 ## Strategy 2
 
 ```{r, message=FALSE}
@@ -106,17 +96,17 @@ fov_summary <- data_filtered %>%
     # Mean for each marker
     across(all_of(functional_markers), mean, .names = "{.col}_mean"),
     
-    # Median for each marker
-    across(all_of(functional_markers), median, .names = "{.col}_median"),
-    
-    # Standard deviation for each marker
-    across(all_of(functional_markers), sd, .names = "{.col}_std"),
-    
-    # 25th percentile
-    across(all_of(functional_markers), ~quantile(.,0.25), .names = "{.col}_q25"),
-    
-    # 75th percentile
-    across(all_of(functional_markers), ~quantile(., 0.75), .names = "{.col}_q75"),
+    # # Median for each marker
+    # across(all_of(functional_markers), median, .names = "{.col}_median"),
+    # 
+    # # Standard deviation for each marker
+    # across(all_of(functional_markers), sd, .names = "{.col}_std"),
+    # 
+    # # 25th percentile
+    # across(all_of(functional_markers), ~quantile(.,0.25), .names = "{.col}_q25"),
+    # 
+    # # 75th percentile
+    # across(all_of(functional_markers), ~quantile(., 0.75), .names = "{.col}_q75"),
     
     # cell count per fov
     neutrophil_count = n(),
@@ -126,7 +116,7 @@ fov_summary <- data_filtered %>%
 
 fov_summary <- fov_summary %>% 
   pivot_wider(names_from = neu_cat,
-              values_from = colnames(fov_summary)[4:44])
+              values_from = colnames(fov_summary)[4:12])
 
 ```
 
@@ -145,27 +135,58 @@ fov_summary %>%
 
 ```{r, fig.pos='center', fig.height=15, fig.width=15}
 
-pca_matrix <- data_neutrophil %>% 
+pca_matrix_near <- data_filtered %>% 
+  filter(neu_cat == 'near') %>% 
   select(all_of(functional_markers)) %>% 
   as.matrix()
+
+pca_matrix_far <- data_filtered %>% 
+  filter(neu_cat == 'far') %>% 
+  select(all_of(functional_markers)) %>% 
+  as.matrix() 
+  
 
 ```
 
 ```{r,fig.pos='center', fig.height=15, fig.width=15, echo=FALSE}
 
-pca_result <- prcomp(pca_matrix, center = TRUE, scale. = TRUE)
+pca_result_near <- prcomp(pca_matrix_near, center = TRUE, scale. = TRUE)
 
-pca_plot <- data.frame(fov = data_neutrophil$fov,
-                       relapse = factor(data_neutrophil$Relapse, levels = c("Y", "N"))) %>% 
-  cbind(as.data.frame(pca_result$x)) 
+pca_result_far <- prcomp(pca_matrix_far, center = TRUE, scale. = TRUE)
 
-pca_plot %>% 
+pca_plot_near <- data.frame(fov = data_filtered$fov[data_filtered$neu_cat == 'near'],
+                       relapse = factor(data_filtered$Relapse[data_filtered$neu_cat == 'near'], levels = c("Y", "N"))) %>% 
+  cbind(as.data.frame(pca_result_near$x))
+
+
+pca_plot_far <- data.frame(fov = data_filtered$fov[data_filtered$neu_cat == 'far'],
+                       relapse = factor(data_filtered$Relapse[data_filtered$neu_cat == 'far'], levels = c("Y", "N"))) %>% 
+  cbind(as.data.frame(pca_result_far$x))
+
+pca_plot_near %>% 
   ggplot(aes(x = PC1, y = PC2, color = relapse)) + 
   geom_point(size = 0.5, alpha = 0.3) + 
   facet_wrap(~relapse) + 
   scale_color_brewer(palette = 'Set1') +
   theme_bw() + 
-  theme(legend.position = "bottom")
+  theme(legend.position = "bottom") + 
+  labs(title = 'Neutrophil, Near')
+
+
+```
+
+```{r,fig.pos='center', fig.height=15, fig.width=15, echo=FALSE}
+
+
+pca_plot_far %>% 
+  ggplot(aes(x = PC1, y = PC2, color = relapse)) + 
+  geom_point(size = 0.5, alpha = 0.3) + 
+  facet_wrap(~relapse) + 
+  scale_color_brewer(palette = 'Set1') +
+  theme_bw() + 
+  theme(legend.position = "bottom") + 
+  labs(title = 'Neutrophil, Far')
+
 
 
 ```
@@ -173,14 +194,41 @@ pca_plot %>%
 
 ```{r,fig.pos='center', fig.height=15, fig.width=15, echo = FALSE}
 
-pca_plot %>% 
+pca_plot_near %>% 
   ggplot(aes(x = PC1, y = PC2, color = fov)) + 
   geom_point(size = 0.5, alpha = 0.3) + 
   facet_wrap(~fov) + 
   theme_bw() + 
-  theme(legend.position = "None")
+  theme(legend.position = "None") + 
+  labs(title = 'Neutrophil, Near')
+
+
+
 
 ```
+
+```{r,fig.pos='center', fig.height=15, fig.width=15, echo = FALSE}
+
+
+pca_plot_far %>% 
+  ggplot(aes(x = PC1, y = PC2, color = fov)) + 
+  geom_point(size = 0.5, alpha = 0.3) + 
+  facet_wrap(~fov) + 
+  theme_bw() + 
+  theme(legend.position = "None") + 
+  labs(title = 'Neutrophil, Far')
+
+
+```
+
+# Model Fitting
+
+We will try these models:
+
+- Random forest
+- Logistic regression with elastic net
+
+
 
 
 
