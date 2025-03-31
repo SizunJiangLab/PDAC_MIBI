@@ -23,12 +23,12 @@ nbhd_palette <- c('Neuronal' = '#4f8c9d',
                   'B Cell Enriched' = '#214d4e',
                   'Tumor' = '#f5a683',
                   'Epithelial' = '#473c85',
-                  'Tumor Killing' = '#5be13e')
+                  'Active Immune' = '#5be13e')
 
 relapse_palette <- c('Y' = 'darkorange2',
                      'N' = 'lightsteelblue')
 
 # list of study markers
-all_markers <- read_delim('all_markers.txt', delim = '\n', col_names = F) %>% dplyr::pull(X1)
-phenotyping_markers <- read_delim('phenotyping_markers.txt', delim = '\n', col_names = F) %>% dplyr::pull(X1)
+all_markers <- read_delim('helpers/all_markers.txt', delim = '\n', col_names = F) %>% dplyr::pull(X1)
+phenotyping_markers <- read_delim('helpers/phenotyping_markers.txt', delim = '\n', col_names = F) %>% dplyr::pull(X1)
 functional_markers <- setdiff(all_markers, phenotyping_markers)

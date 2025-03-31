@@ -12,8 +12,8 @@ source('helpers/palettes.R')
 ```
 
 ```{r}
-annots <- read_csv('data/annotations.csv')
-mdata <- read_csv('data/mdata_cleaned.csv')
+annots <- read_csv('../data/annotations.csv')
+mdata <- read_csv('../data/mdata_cleaned.csv')
 ```
 
 ##### == FIGURE 2 ==

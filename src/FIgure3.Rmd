@@ -12,8 +12,8 @@ source('helpers/palettes.R')
 ```
 
 ```{r}
-annots <- read_csv('data/annotations.csv') %>% dplyr::filter(CN != 'Other')
-mdata <- read_csv('data/mdata_cleaned.csv') # %>% 
+annots <- read_csv('../data/annotations.csv') %>% dplyr::filter(CN != 'Other')
+mdata <- read_csv('../data/mdata_cleaned.csv') # %>% 
   # dplyr::mutate(pT = str_split(TNM_Stage, pattern = ' ', simplify = T)[,1])
 ```
 
@@ -24,7 +24,7 @@ mdata <- read_csv('data/mdata_cleaned.csv') # %>%
 ```{r}
 pdf('Figure3B_2.pdf', width = 4, height = 6)
 draw_zheatmap(annots, functional_markers, 'CN', 
-              column_order = c('Neuronal', 'Immune Rich', 'Immune Suppressive', 'Endothelial', 'B Cell Enriched', 'Tumor', 'Epithelial', 'Tumor Killing'))
+              column_order = c('Neuronal', 'Immune Rich', 'Immune Suppressive', 'Endothelial', 'B Cell Enriched', 'Tumor', 'Epithelial', 'Active Immune'))
 dev.off()
 ```
 
@@ -318,7 +318,7 @@ interface_marker_results <- interface_marker_results %>%
   )
 
 immune_interfaces <- interface_marker_results %>%
-  filter(nbhd %in% c('Immune Rich', 'Tumor Killing'))
+  filter(nbhd %in% c('Immune Rich', 'Active Immune'))
 
 functional_markers <- c('CD11b', 'CD15', 'CD16', 'MPO', 'CD45RA', 'CD45RO', 'HLA.DR', 'Ki67', 'PD.1', 'PD.L1')
 immune_markers_long <- immune_interfaces %>%
