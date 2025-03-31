@@ -2,7 +2,11 @@
 title: "Model"
 author: "Huaying Qiu"
 date: "2025-03-29"
-output: html_document
+output: 
+  html_document:
+    toc: true
+    toc_float: true
+    code_folding: hide
 editor_options: 
   chunk_output_type: inline
 ---
@@ -19,7 +23,7 @@ This Rmd servers to fit models using PDAC data, mainly neutrophil features, to p
 # Library
 
 
-```{r, message=FALSE, warning=FALSE}
+```{r class.source='fold-show', message=FALSE, warning=FALSE}
 
 library(tidyverse)
 library(caret)
@@ -27,13 +31,14 @@ library(glmnet)
 library(randomForest)
 library(ggcorrplot)
 library(scatterPlotMatrix)
-library(umap)
+library(reshape2)
+set.seed(123)
 
 ```
 
 # Load data
 
-```{r, message=FALSE, warning=FALSE}
+```{r class.source='fold-show', message=FALSE, warning=FALSE}
 
 data <- read_csv("~/pdac/data/All_anno_clean_metadata_Tumor distance-inf_0328.csv")
 
@@ -122,7 +127,7 @@ fov_summary <- fov_summary %>%
 
 Now let's check the correlation of these newly created variables. And no surprise, within each marker, a lot of these metrics are highly correlated since they are different summary statistics of the same distribution. To remedy potential multicollinearity, we will fit the model using some regularization method like LASSO or elastic net. 
 
-```{r, echo=FALSE, fig.pos='center', fig.width=15, fig.height=15, cache=TRUE}
+```{r, echo=FALSE, fig.pos='center', fig.width=8, fig.height=8, cache=TRUE}
 
 categorical <- list(Relapse = c('Y', 'N'))
 
@@ -155,11 +160,13 @@ pca_result_near <- prcomp(pca_matrix_near, center = TRUE, scale. = TRUE)
 pca_result_far <- prcomp(pca_matrix_far, center = TRUE, scale. = TRUE)
 
 pca_plot_near <- data.frame(fov = data_filtered$fov[data_filtered$neu_cat == 'near'],
+                            patient =  data_filtered$Patient[data_filtered$neu_cat == 'near'],
                        relapse = factor(data_filtered$Relapse[data_filtered$neu_cat == 'near'], levels = c("Y", "N"))) %>% 
   cbind(as.data.frame(pca_result_near$x))
 
 
 pca_plot_far <- data.frame(fov = data_filtered$fov[data_filtered$neu_cat == 'far'],
+                           patient = data_filtered$Patient[data_filtered$neu_cat == 'far'],
                        relapse = factor(data_filtered$Relapse[data_filtered$neu_cat == 'far'], levels = c("Y", "N"))) %>% 
   cbind(as.data.frame(pca_result_far$x))
 
@@ -228,7 +235,633 @@ We will try these models:
 - Random forest
 - Logistic regression with elastic net
 
+## Random forest
 
+### Strategy 1
+
+Since this leverage on the original single cell information and we will use the majority-vote pricinple to assign a final label at the aggregated level, we will try both patient level prediction and fov level prediction.
+
+#### FOV level
+
+```{r, message=FALSE, warning=FALSE}
+
+set.seed(123)
+
+unique_fov <- unique(data_filtered$fov)
+
+train_fov <- sample(unique_fov, round(0.7 * length(unique_fov)))
+
+test_fov <- setdiff(unique_fov, train_fov)
+
+train <- data_filtered %>% 
+  filter(fov %in% train_fov) %>% 
+  select(fov, Relapse, all_of(functional_markers), Age, Sex, BMI, Smoking_History, neu_cat) %>% 
+  mutate(Relapse = factor(Relapse),
+         Sex = factor(Sex),
+         Smoking_History = factor(Smoking_History),
+         neu_cat = factor(neu_cat))
+
+test <- data_filtered %>% 
+  anti_join(train) %>% 
+  select(fov, Relapse, all_of(functional_markers), Age, Sex, BMI, Smoking_History, neu_cat) %>% 
+  mutate(Relapse = factor(Relapse),
+         Sex = factor(Sex),
+         Smoking_History = factor(Smoking_History),
+         neu_cat = factor(neu_cat))
+
+```
+
+```{r,message=FALSE,warning=FALSE,fig.pos='center', fig.height=15, fig.width=15}
+
+# m1 <- randomForest(Relapse ~ Age + Sex + BMI + Smoking_History + CD16 + MPO + CD45.RA + CD45RO + HLA.DR + Ki.67 + PD.1 + PD.L1, data = train)
+
+m1 <- randomForest(Relapse ~ CD16 + MPO + CD45.RA + CD45RO + HLA.DR + Ki.67 + PD.1 + PD.L1 + neu_cat, data = train)
+
+test$pred <- predict(m1, test)
+
+test_agg <- test %>% 
+  group_by(fov, Relapse, pred) %>%
+  count() %>% 
+  slice_max(order_by = n, n = 1) %>% 
+  ungroup() %>% 
+  select(-n)
+
+cat("Accuracy:\n")
+  
+sum(test_agg$Relapse == test_agg$pred) / nrow(test_agg)
+
+cat("Variable importance: \n")
+
+varImpPlot(m1)
+
+```
+
+Difficulties:
+
+- Couldn't really include any metadata because too many repeats, which artificially inflate the prediction accuracy and importance of those variables. That's a big deal breaker
+- We subset to only neutrophils so we are basically classifying FOV with relapse/non-relapse predition on neutrophils. This is somewhat OK.
+
+### Strategy 2
+
+```{r,message=FALSE,warning=FALSE}
+
+fov_summary <- fov_summary %>% 
+  mutate(neu_near_prop = neutrophil_count_near/(neutrophil_count_far + neutrophil_count_near),
+         neu_far_prop = neutrophil_count_far/(neutrophil_count_far + neutrophil_count_near))
+
+set.seed(123)
+
+unique_fov <- unique(fov_summary$fov)
+
+train_fov <- sample(unique_fov, round(0.7 * length(unique_fov)))
+
+test_fov <- setdiff(unique_fov, train_fov)
+
+train <- fov_summary %>% 
+  filter(fov %in% train_fov) %>% 
+  mutate(Relapse = factor(Relapse))
+
+test <- fov_summary %>% 
+  anti_join(train) %>% 
+  mutate(Relapse = factor(Relapse))
+
+```
+
+
+```{r,message=FALSE,warning=FALSE,fig.pos='center', fig.height=15, fig.width=15}
+
+formula <- as.formula(paste('Relapse ~ ', paste(colnames(fov_summary[c(3:18, 21)]), collapse = " + ")))
+
+m2 <- randomForest(formula, data = train)
+
+test$pred <- predict(m2, test)
+
+cat("Accuracy:\n")
+
+sum(test$Relapse == test$pred) / nrow(test)
+
+cat("Variable importance:\n")
+
+varImpPlot(m2)
+
+```
+
+Difficulties:
+
+- sample size too small while too many variables. Result very unreliable. Should abandon this approach. 
+
+### Strategy 3
+
+#### FOV approach, sample by patient. Repeated 3-fold cross validation
+
+There are several caveats that need to be addressed:
+
+1. Since each patient can have multiple FOVs, it's paramount to perform the training and testing split at patient level to prevent information leakage when fitting the model. 
+2. Since our response variable --- relapse/non-relapse --- is a patient level feature, our effective sample size is small with 8 relapse patients and 4 non-relapse patients. With the limited sample size, we use a repeated 3-fold cross validation to get relatively more robust results.
+3. Due to the limited sample size, all model fitting results should be taken cautiously. 
+
+```{r,message=FALSE,warning=FALSE}
+
+pca_near <- pca_plot_near %>% 
+  mutate(bin = 'near')
+
+pca_far <- pca_plot_far %>% 
+  mutate(bin = 'far')
+
+pca_df <- pca_near %>% 
+  full_join(pca_far) %>% 
+  mutate(bin = factor(bin))
+
+```
+
+```{r,fig.pos='center',echo=FALSE,fig.width=8, fig.height=8}
+
+pca_summary <- pca_df %>% 
+  group_by(patient, fov, relapse, bin) %>% 
+  summarise(across(where(is.numeric), mean, .names = "{.col}_mean")) %>% 
+  pivot_wider(names_from = bin,
+              values_from = 5:12) %>% 
+  ungroup()
+
+categorical <- list(relapse = c('Y', 'N'))
+
+pca_summary %>% 
+  scatterPlotMatrix(zAxisDim = 'relapse', rotateTitle = TRUE, categoricalCS = "Set1", categorical = categorical)
+
+```
+
+```{r}
+
+#####################################################
+# 1. Setup Parameters
+#####################################################
+
+# Cross-validation parameters
+k_folds <- 3         # Using fewer folds since you only have 12 patients
+n_repeats <- 10      # Number of repetitions
+n_trees <- 500       # Number of trees per forest
+
+# Create data frame to store results
+result_summary <- data.frame(
+  fold = character(),
+  repetition = numeric(),
+  accuracy = numeric(),
+  precision = numeric(),
+  recall = numeric(),
+  F1 = numeric(),
+  var1 = character(),
+  var2 = character(),
+  var3 = character(),
+  var4 = character(),
+  var5 = character(),
+  train_patients = character(),
+  test_patients = character()
+)
+
+# Variable to store importance values across all folds
+all_importance <- list()
+
+all_models <- list()
+
+#####################################################
+# 2. Repeated K-fold Cross-Validation Function
+#####################################################
+
+run_cv <- function(pca_summary, formula, k_folds, n_repeats) {
+  
+  # Get unique patients by relapse status
+  unique_relapse_patients <- unique(pca_summary$patient[pca_summary$relapse == 'Y'])
+  unique_non_patients <- unique(pca_summary$patient[pca_summary$relapse == 'N'])
+  
+  # Create a data frame of patients with their relapse status
+  patients_df <- data.frame(
+    patient = c(unique_relapse_patients, unique_non_patients),
+    relapse = c(rep('Y', length(unique_relapse_patients)), 
+                rep('N', length(unique_non_patients)))
+  )
+  
+  # Create a list to store all fold information
+  all_folds <- list()
+  fold_counter <- 1
+  
+  # Generate repeated k-fold splits at PATIENT level
+  for (rep in 1:n_repeats) {
+    # Set a different seed for each repetition
+    set.seed(123 + rep)
+    
+    # Create stratified folds - keeping relapse and non-relapse patients balanced
+    folds <- createFolds(patients_df$relapse, k = k_folds, list = TRUE, returnTrain = FALSE)
+    
+    for (fold in 1:k_folds) {
+      # Get test patient IDs for this fold
+      test_patient_indices <- folds[[fold]]
+      test_patients <- patients_df$patient[test_patient_indices]
+      
+      # Get train patient IDs (all patients not in test)
+      train_patients <- setdiff(patients_df$patient, test_patients)
+      
+      # Store in the list
+      all_folds[[fold_counter]] <- list(
+        rep = rep,
+        fold = fold,
+        train_patients = train_patients,
+        test_patients = test_patients
+      )
+      
+      fold_counter <- fold_counter + 1
+    }
+  }
+  
+  # Initialize result data frame
+  results <- data.frame()
+  
+  # Run models for all folds
+  for (i in 1:length(all_folds)) {
+    # Get patients for this fold
+    train_patients <- all_folds[[i]]$train_patients
+    test_patients <- all_folds[[i]]$test_patients
+    rep_num <- all_folds[[i]]$rep
+    fold_num <- all_folds[[i]]$fold
+    
+    # Get FOVs corresponding to these patients
+    train_fov <- pca_summary$fov[pca_summary$patient %in% train_patients]
+    test_fov <- pca_summary$fov[pca_summary$patient %in% test_patients]
+    
+    # Create training and testing datasets
+    train <- pca_summary %>% 
+      filter(fov %in% train_fov) %>% 
+      mutate(relapse = factor(relapse))
+    
+    test <- pca_summary %>% 
+      filter(fov %in% test_fov) %>% 
+      mutate(relapse = factor(relapse))
+    
+    # Check if we have both classes in the training set
+    if (length(unique(train$relapse)) < 2) {
+      warning(paste("Fold", i, "has only one class in training set. Skipping."))
+      next
+    }
+    
+    # Train random forest model
+    m <- randomForest(formula, 
+                      data = train, 
+                      ntree = n_trees)
+    
+    if (rep_num == 1) {
+      all_models[[fold_num]] <- m
+    }
+    
+    # Make predictions
+    test$pred <- predict(m, test)
+    
+    # Calculate metrics
+    # Add small epsilon to prevent division by zero in edge cases
+    epsilon <- 1e-10
+    
+    accuracy <- sum(test$relapse == test$pred) / nrow(test)
+    
+    recall <- sum(test$relapse == 'Y' & test$pred == 'Y') / 
+      (sum(test$relapse == 'Y') + epsilon)
+    
+    precision <- sum(test$relapse == 'Y' & test$pred == 'Y') / 
+      (sum(test$pred == 'Y') + epsilon)
+    
+    F1 <- 2 * precision * recall / (precision + recall + epsilon)
+    
+    # Get variable importance
+    var_imp <- varImp(m)
+    var_imp$variable <- rownames(var_imp)
+    
+    # Store variable importance for later aggregation
+    all_importance[[i]] <- var_imp
+    
+    # Get top 5 important variables
+    top_vars <- var_imp %>% 
+      slice_max(order_by = Overall, n = 5)
+    
+    imp_vars <- top_vars$variable
+    
+    # If fewer than 5 variables, pad with NA
+    if (length(imp_vars) < 5) {
+      imp_vars <- c(imp_vars, rep(NA, 5 - length(imp_vars)))
+    }
+    
+    # Store results
+    result_summary <- rbind(result_summary, data.frame(
+      fold = fold_num,
+      repetition = rep_num,
+      accuracy = accuracy,
+      precision = precision,
+      recall = recall,
+      F1 = F1,
+      var1 = imp_vars[1],
+      var2 = imp_vars[2],
+      var3 = imp_vars[3],
+      var4 = imp_vars[4],
+      var5 = imp_vars[5],
+      train_patients = paste(train_patients, collapse = ', '),
+      test_patients = paste(test_patients, collapse = ', ')
+    ))
+  }
+  
+  return(list(result_summary = result_summary, all_importance = all_importance, all_models = all_models))
+}
+
+```
+
+```{r,message=FALSE,warning=FALSE,echo=FALSE}
+
+#####################################################
+# 3. Run the CV and Analyze Results
+#####################################################
+
+# Define your formula based on your variable columns (columns 4-19)
+formula <- as.formula(paste('relapse ~ ', paste(colnames(pca_summary[c(4:19)]), collapse = " + ")))
+
+# Run the cross-validation
+set.seed(123)  # Master seed for reproducibility
+cv_results <- run_cv(pca_summary, formula, k_folds, n_repeats)
+
+# Print overall summary statistics
+cat("Average Performance Metrics Across All Folds:\n")
+cat("Accuracy:", mean(cv_results$result_summary$accuracy, na.rm = TRUE), "\n")
+cat("Precision:", mean(cv_results$result_summary$precision, na.rm = TRUE), "\n")
+cat("Recall:", mean(cv_results$result_summary$recall, na.rm = TRUE), "\n")
+cat("F1 Score:", mean(cv_results$result_summary$F1, na.rm = TRUE), "\n\n")
+
+```
+
+```{r, message=FALSE,warning=FALSE,echo=FALSE}
+
+#####################################################
+# 4. Analyze Variable Importance
+#####################################################
+
+# Combine all importance data from different folds
+all_imp_df <- bind_rows(cv_results$all_importance, .id = "fold")
+
+# Calculate average importance for each variable
+avg_importance <- all_imp_df %>%
+  group_by(variable) %>%
+  summarize(
+    mean_importance = mean(Overall, na.rm = TRUE),
+    sd_importance = sd(Overall, na.rm = TRUE),
+    min_importance = min(Overall, na.rm = TRUE),
+    max_importance = max(Overall, na.rm = TRUE),
+    lower_ci = quantile(Overall, 0.025, na.rm = TRUE),
+    upper_ci = quantile(Overall, 0.975, na.rm = TRUE),
+    frequency = n()
+  ) %>%
+  arrange(desc(mean_importance))
+
+# Print top 10 most important variables
+print(head(avg_importance, 10))
+
+# Count variable frequency in top 5
+var_counts <- c(
+  table(cv_results$result_summary$var1),
+  table(cv_results$result_summary$var2),
+  table(cv_results$result_summary$var3),
+  table(cv_results$result_summary$var4),
+  table(cv_results$result_summary$var5)
+)
+
+var_frequency <- data.frame(
+  variable = names(var_counts),
+  count = as.numeric(var_counts)
+) %>%
+  group_by(variable) %>%
+  summarize(total_count = sum(count)) %>%
+  arrange(desc(total_count))
+
+
+print(head(var_frequency, 10))
+
+```
+
+
+```{r, fig.pos='center', fig.width=15, fig.height=15, message=FALSE, warning=FALSE, echo = FALSE}
+
+#####################################################
+# 5. Visualize Results
+#####################################################
+
+# Plot average variable importance with confidence intervals
+ggplot(head(avg_importance, 15), aes(x = reorder(variable, mean_importance), y = mean_importance)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  geom_errorbar(aes(ymin = lower_ci, ymax = upper_ci), width = 0.2) +
+  coord_flip() +
+  xlab("Variables") +
+  ylab("Mean Importance") +
+  ggtitle("Top 15 Variables by Importance for Relapse Prediction") +
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 20),
+          axis.text.y = element_text(face = "bold", size = 20),
+          axis.title = element_text(face = "bold", size = 20),
+          plot.title = element_text(hjust = 0.5, face = "bold", size = 20))
+
+```
+
+```{r,fig.pos='center', fig.width=15, fig.height=15, message=FALSE, warning=FALSE, echo = FALSE}
+
+# Plot importance distribution across folds
+ggplot(all_imp_df %>% filter(variable %in% head(avg_importance$variable, 10)), 
+       aes(x = reorder(variable, Overall, FUN = median), y = Overall)) +
+  geom_boxplot(fill = "lightblue") +
+  coord_flip() +
+  xlab("Variables") +
+  ylab("Importance Score") +
+  ggtitle("Stability of Top 10 Variable Importance Scores Across Folds") +
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 20),
+          axis.text.y = element_text(face = "bold", size = 20),
+          axis.title = element_text(face = "bold", size = 20),
+          plot.title = element_text(hjust = 0.5, face = "bold", size = 20))
+
+```
+
+```{r,fig.pos='center', fig.width=15, fig.height=15, message=FALSE, warning=FALSE, echo = FALSE}
+
+# Plot metrics across folds
+cv_results$result_summary %>%
+  pivot_longer(cols = c(accuracy, precision, recall, F1), 
+               names_to = "metric", 
+               values_to = "value") %>%
+  ggplot(aes(x = metric, y = value)) +
+  geom_boxplot(fill = "lightgreen") +
+  xlab("Performance Metric") +
+  ylab("Value") +
+  ggtitle("Distribution of Performance Metrics Across All Folds") +
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 20),
+          axis.text.y = element_text(face = "bold", size = 20),
+          axis.title = element_text(face = "bold", size = 20),
+          plot.title = element_text(hjust = 0.5, face = "bold", size = 20))
+
+```
+
+
+```{r,fig.pos='center', fig.width=15, fig.height=15, message=FALSE, warning=FALSE, echo = FALSE}
+
+# Get top 5 variables
+top_vars <- head(var_frequency$variable, 5)
+
+# Function to create PDPs for a single model
+create_pdps <- function(model, data, top_vars) {
+  pdp_plots <- list()
+  
+  for (var in top_vars) {
+    # Skip if variable doesn't exist in the data
+    if (!var %in% colnames(data)) {
+      warning(paste("Variable", var, "not found in data. Skipping."))
+      next
+    }
+    
+    # Create partial dependence data
+    partial_data <- pdp::partial(model, pred.var = var, train = data)
+    
+    # Convert Y/N to 1/0 if needed for plotting
+    if("yhat" %in% colnames(partial_data)) {
+      # Already numeric
+      plot_data <- partial_data
+    } else {
+      # Need to convert factor predictions to numeric
+      # This assumes Y is the positive class
+      plot_data <- partial_data %>%
+        mutate(yhat = ifelse(grepl("Y", yhat.class), 1, 0))
+    }
+    
+    # Create PDP plot
+    p <- ggplot(plot_data, aes_string(x = var, y = "yhat")) +
+      geom_line(color = "blue", size = 1) +
+      geom_rug(sides = "b", alpha = 0.2) +
+      ylab("Probability of Relapse") +
+      xlab(var) +
+      ggtitle(paste("Partial Dependence Plot for", var)) +
+      theme_minimal() 
+    
+    pdp_plots[[var]] <- p
+  }
+  
+  return(pdp_plots)
+}
+
+# Create PDPs for models from first repetition
+if (length(cv_results$all_models) > 0) {
+  # cat("\nCreating Partial Dependence Plots for top variables...\n")
+  
+  # Extract one model and corresponding data
+  model1 <- cv_results$all_models[[1]]
+  
+  # Get data used for this model
+  fold1_patients <- strsplit(cv_results$result_summary$train_patients[1], ", ")[[1]]
+  fold1_fovs <- pca_summary$fov[pca_summary$patient %in% fold1_patients]
+  model1_data <- pca_summary %>% 
+    filter(fov %in% fold1_fovs) %>% 
+    mutate(relapse = factor(relapse))
+  
+  # Create PDPs
+  pdp_plots <- create_pdps(model1, model1_data, top_vars)
+  
+  # Arrange plots in a grid
+  # do.call(gridExtra::grid.arrange, c(pdp_plots, ncol = 2))
+  
+  # Create ICE plots (Individual Conditional Expectation) for more detailed insights
+  # ICE plots show how the prediction changes for each individual observation
+  # cat("\nCreating ICE plots for top variables...\n")
+  
+  ice_plots <- list()
+  
+  ice_vars <- names(pdp_plots)[1:length(pdp_plots)] # Just do first 2 to save processing time
+  
+  for (var in ice_vars) {
+    ice_data <- pdp::partial(model1, pred.var = var, train = model1_data, ice = TRUE)
+    
+    # If needed, convert factor predictions to numeric
+    if(!"yhat" %in% colnames(ice_data)) {
+      ice_data <- ice_data %>%
+        mutate(yhat = ifelse(grepl("Y", yhat.class), 1, 0))
+    }
+    
+    # Create ICE plot
+    p_ice <- ggplot() +
+      geom_line(data = ice_data, aes_string(x = var, y = "yhat", group = "yhat.id"), 
+               alpha = 0.7, color = "black") +
+      geom_line(data = ice_data %>% group_by(!!sym(var)) %>% summarize(yhat = mean(yhat)),
+               aes_string(x = var, y = "yhat"), color = "red", size = 1.5) +
+      ylab("Probability of Relapse") +
+      xlab(var) +
+      ggtitle(paste("ICE Plot for", var, "(individual lines in gray, average in red)")) +
+      theme_minimal() 
+    
+    ice_plots[[var]] <- p_ice
+  }
+  
+  # do.call(gridExtra::grid.arrange, c(ice_plots, ncol = 2))
+  
+  
+} else {
+  cat("No models available for PDPs. Check if any folds completed successfully.\n")
+}
+
+```
+
+```{r,fig.pos='center', fig.width=15, fig.height=15, message=FALSE, warning=FALSE, echo = FALSE}
+
+do.call(gridExtra::grid.arrange, c(pdp_plots, ncol = 2))
+
+```
+
+
+```{r,fig.pos='center', fig.width=15, fig.height=15, message=FALSE, warning=FALSE, echo = FALSE}
+
+do.call(gridExtra::grid.arrange, c(ice_plots, ncol = 2))
+
+```
+
+What is a **P**artial **D**ependency **P**lot (PDP)? In our case of a random forest model, replace the split criterion of a corresponding variable when it appears in a tree; run through all trees; calculate the corresponding prediction probability. 
+
+I will use `PC4_mean_near` to demonstrate how to interpret partial dependency plots (PDP). We can observe that:
+
+- When `PC4_mean_near` is negative, the probability of relapse stays relatively low.
+- When `PC4_mean_near` crosses zero and becomes positive, there's a sharp increase in probability of relapse.
+- Above 0, as `PC4_mean_near` continues to increase, the probablity of relapse also increases and gradually stabilizes. 
+
+This indicates that higher values of `PC4_mean_near` are strongly correlated with increased probability of relapse.
+
+What is a **I**ndividual **C**onditional **E**xpectation (ICE) plot? It's basically a PDP on observation level. It shows how the relapse probability for a individual observation (an FOV in our case) changes when we change the value of a variable. 
+
+Now let's examine the composition of each of the top 5 important principle components to see if there is any biological insight.
+
+```{r,echo=FALSE,warning=FALSE,fig.pos='center',fig.height=15,fig.width=15}
+
+pca_loading_df <- as.data.frame(pca_result_near$rotation[,c('PC2', 'PC6', 'PC8', 'PC4', 'PC5')]) %>% 
+  rownames_to_column(var = 'Marker')
+
+pca_loading_melted <- melt(pca_loading_df, id.vars = "Marker",
+                           variable.name = 'Component',
+                           value.name = 'Loading')
+
+pca_loading_melted %>% 
+  ggplot(aes(x = Component, y = Marker, fill = Loading)) +
+    geom_tile(color = "black", size = 1) +
+    scale_fill_gradient2(high = "#c02c38", mid = 'white', low = "#144a74") +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 20),
+          axis.text.y = element_text(face = "bold", size = 20),
+          axis.title = element_text(face = "bold", size = 20),
+          legend.title = element_text(face = "bold"),
+          plot.title = element_text(hjust = 0.5, face = "bold", size = 30)) +
+    labs(title = "PCA Loading Matrix Heatmap",
+         x = "Principal Component",
+         y = "Marker",
+         fill = "Loading Value") +
+    # Add the values as text
+    geom_text(aes(label = sprintf("%.2f", Loading)), 
+              color = "black", size = 8) + 
+  coord_fixed()
+
+```
 
 
 
