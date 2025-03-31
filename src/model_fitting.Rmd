@@ -635,7 +635,7 @@ var_frequency <- data.frame(
   arrange(desc(total_count))
 
 
-print(head(var_frequency, 10))
+print(head(var_frequency, 15))
 
 ```
 
@@ -646,14 +646,32 @@ print(head(var_frequency, 10))
 # 5. Visualize Results
 #####################################################
 
+ggplot(head(var_frequency, 10), aes(x = reorder(variable, total_count), y = total_count)) +
+  geom_bar(stat = "identity", fill = "salmon") +
+  coord_flip() +
+  xlab("Variables") +
+  ylab("Frequency") +
+  ggtitle("Top 10 Variables by Frequency in Top 5") +
+  theme_minimal() + 
+  theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 20),
+          axis.text.y = element_text(face = "bold", size = 20),
+          axis.title = element_text(face = "bold", size = 20),
+          plot.title = element_text(hjust = 0.5, face = "bold", size = 20))
+
+```
+
+
+
+```{r, fig.pos='center', fig.width=15, fig.height=15, message=FALSE, warning=FALSE, echo = FALSE}
+
 # Plot average variable importance with confidence intervals
-ggplot(head(avg_importance, 15), aes(x = reorder(variable, mean_importance), y = mean_importance)) +
+ggplot(head(avg_importance, 10), aes(x = reorder(variable, mean_importance), y = mean_importance)) +
   geom_bar(stat = "identity", fill = "steelblue") +
   geom_errorbar(aes(ymin = lower_ci, ymax = upper_ci), width = 0.2) +
   coord_flip() +
   xlab("Variables") +
   ylab("Mean Importance") +
-  ggtitle("Top 15 Variables by Importance for Relapse Prediction") +
+  ggtitle("Top 10 Variables by Importance for Relapse Prediction") +
   theme_minimal() + 
   theme(axis.text.x = element_text(angle = 0, hjust = 0.5, size = 20),
           axis.text.y = element_text(face = "bold", size = 20),
