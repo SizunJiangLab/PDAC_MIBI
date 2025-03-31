@@ -646,6 +646,8 @@ print(head(var_frequency, 15))
 # 5. Visualize Results
 #####################################################
 
+# pdf(file = "~/pdac/PDAC_MIBI/figures/var_imp_frequency.pdf", height = 10, width = 10)
+
 ggplot(head(var_frequency, 10), aes(x = reorder(variable, total_count), y = total_count)) +
   geom_bar(stat = "identity", fill = "salmon") +
   coord_flip() +
@@ -658,11 +660,15 @@ ggplot(head(var_frequency, 10), aes(x = reorder(variable, total_count), y = tota
           axis.title = element_text(face = "bold", size = 20),
           plot.title = element_text(hjust = 0.5, face = "bold", size = 20))
 
+# dev.off()
+
 ```
 
 
 
 ```{r, fig.pos='center', fig.width=15, fig.height=15, message=FALSE, warning=FALSE, echo = FALSE}
+
+# pdf(file = "~/pdac/PDAC_MIBI/figures/var_avereage_imp.pdf", height = 10, width = 10)
 
 # Plot average variable importance with confidence intervals
 ggplot(head(avg_importance, 10), aes(x = reorder(variable, mean_importance), y = mean_importance)) +
@@ -678,9 +684,13 @@ ggplot(head(avg_importance, 10), aes(x = reorder(variable, mean_importance), y =
           axis.title = element_text(face = "bold", size = 20),
           plot.title = element_text(hjust = 0.5, face = "bold", size = 20))
 
+# dev.off()
+
 ```
 
 ```{r,fig.pos='center', fig.width=15, fig.height=15, message=FALSE, warning=FALSE, echo = FALSE}
+
+# pdf(file = "~/pdac/PDAC_MIBI/figures/var_stability.pdf", height = 10, width = 10)
 
 # Plot importance distribution across folds
 ggplot(all_imp_df %>% filter(variable %in% head(avg_importance$variable, 10)), 
@@ -696,9 +706,13 @@ ggplot(all_imp_df %>% filter(variable %in% head(avg_importance$variable, 10)),
           axis.title = element_text(face = "bold", size = 20),
           plot.title = element_text(hjust = 0.5, face = "bold", size = 20))
 
+# dev.off()
+
 ```
 
 ```{r,fig.pos='center', fig.width=15, fig.height=15, message=FALSE, warning=FALSE, echo = FALSE}
+
+# pdf(file = "~/pdac/PDAC_MIBI/figures/cv_performance.pdf", height = 10, width = 10)
 
 # Plot metrics across folds
 cv_results$result_summary %>%
@@ -715,6 +729,8 @@ cv_results$result_summary %>%
           axis.text.y = element_text(face = "bold", size = 20),
           axis.title = element_text(face = "bold", size = 20),
           plot.title = element_text(hjust = 0.5, face = "bold", size = 20))
+
+# dev.off()
 
 ```
 
@@ -826,7 +842,11 @@ if (length(cv_results$all_models) > 0) {
 
 ```{r,fig.pos='center', fig.width=15, fig.height=15, message=FALSE, warning=FALSE, echo = FALSE}
 
+# pdf(file = "~/pdac/PDAC_MIBI/figures/PDP.pdf", height = 10, width = 10)
+
 do.call(gridExtra::grid.arrange, c(pdp_plots, ncol = 2))
+
+# dev.off()
 
 ```
 
@@ -860,6 +880,8 @@ pca_loading_melted <- melt(pca_loading_df, id.vars = "Marker",
                            variable.name = 'Component',
                            value.name = 'Loading')
 
+# pdf(file = "~/pdac/PDAC_MIBI/figures/PCA_heatmap.pdf", height = 10, width = 10)
+
 pca_loading_melted %>% 
   ggplot(aes(x = Component, y = Marker, fill = Loading)) +
     geom_tile(color = "black", size = 1) +
@@ -878,6 +900,8 @@ pca_loading_melted %>%
     geom_text(aes(label = sprintf("%.2f", Loading)), 
               color = "black", size = 8) + 
   coord_fixed()
+
+# dev.off()
 
 ```
 
