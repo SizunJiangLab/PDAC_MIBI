@@ -32,6 +32,11 @@ The following is an overview of the code in this repository. Please note that si
 
 | File Name | Description |
 | :---------- | :---------- |
-| Figure2.rmd |  |
-| Figure3.rmd |  |
-| Figure4.rmd |  |
+| Figure2.rmd | Scripts for generating plots as shown in Figure 2 |
+| Figure3.rmd | Scripts for generating plots as shown in Figure 3 |
+| Figure4 |  |
+| cell_maps.Rmd | Script for generating cell annotation maps |
+| model_fitting.Rmd |  |
+| model_fitting.html |  |
+| pdac_lda.ipynb | Notebook for running Spatial LDA and generating related plots |
+| helpers/ | Helper scripts for generating plots in main figure scripts |
