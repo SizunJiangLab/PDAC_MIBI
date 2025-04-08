@@ -92,7 +92,7 @@ data_filtered <- data_neutrophil %>%
 
 ```{r, message=FALSE}
 
-functional_markers <- c("CD16", "MPO", "CD45.RA", "CD45RO", "HLA.DR", "Ki.67", "PD.1", "PD.L1")
+functional_markers <- c("CD16", "MPO", "CD45.RA", "CD45RO", "HLA.DR", "Ki.67", "PD.L1")
 
 fov_summary <- data_filtered %>%
   select(fov, all_of(functional_markers), Relapse, neu_cat) %>% 
@@ -675,7 +675,7 @@ pdf(file = "~/pdac/PDAC_MIBI/figures/var_avereage_imp.pdf", height = 10, width =
 # Plot average variable importance with confidence intervals
 ggplot(head(avg_importance, 10), aes(x = reorder(variable, mean_importance), y = mean_importance)) +
   geom_bar(stat = "identity", fill = "steelblue") +
-  geom_errorbar(aes(ymin = lower_ci, ymax = upper_ci), width = 0.2) +
+  geom_errorbar(aes(ymin = mean_importance - sd_importance, ymax = mean_importance + sd_importance), width = 0.2) +
   coord_flip() +
   xlab("Variables") +
   ylab("Mean Importance") +
