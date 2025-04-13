@@ -28,7 +28,7 @@ Pancreatic ductal adenocarcinoma (PDAC) remains one of the most lethal malignanc
 
 ## Code Overview
 
-The following is an overview of the code in this repository. Please note that since this repository doesn't contain the necessary data that was used for the analysis, if one wishes to reproduce the result, one will need to download the data and change the file path accordingly in the code.
+The following is an overview of the code in this repository. Please note that since this repository doesn't contain the necessary data that was used for the analysis, if one wishes to reproduce the result, one will need to download the data from Zenodo (10.5281/zenodo.15109931) and change the file path accordingly in the code.
 
 | File Name | Description |
 | :---------- | :---------- |
