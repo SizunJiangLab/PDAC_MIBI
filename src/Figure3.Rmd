@@ -30,61 +30,62 @@ dev.off()
 
 ### Figure 3C CN logfc enrichment (relapse+/-)
 ```{r}
-p <- annots %>%
-  left_join(mdata[, c('Patient', 'Relapse')]) %>%
-  group_by(path, CN, Relapse) %>%
-  summarise(n = n(), .groups = 'drop') %>%
-  group_by(CN, Relapse) %>%
-  summarise(mean_n = mean(n), .groups = 'drop') %>%
-  pivot_wider(names_from = Relapse, values_from = mean_n) %>%
-  mutate(across(everything(), ~replace(., is.na(.), 0))) %>%
-  pivot_longer(-c(CN), names_to = 'Relapse', values_to = 'n') %>%
-  group_by(CN) %>%
-  dplyr::mutate(total_n = sum(n)) %>%
-  dplyr::mutate(diff = log2((n/total_n) / (first(n)/first(total_n)))) %>%
-  dplyr::filter(!Relapse == 'N') %>%
-  ggplot(aes(x = reorder(CN, diff), y = diff, fill = CN)) +
-    geom_col() +
-    geom_rect(aes(xmin = 0, ymin = 0, xmax = Inf, ymax = Inf), fill = 'darkorange2', alpha = 0.02) +
-    geom_rect(aes(xmin = 0, ymin = -Inf, xmax = Inf, ymax = 0), fill = 'lightsteelblue', alpha = 0.02) +
-    scale_fill_manual(values = nbhd_palette, guide = 'none') +
-    annotate('text', x = 3, y = 0.5, label = 'Relapse+', size = 10) +
-    annotate('text', x = 5, y = -0.5, label = 'Relapse-', size = 10) +
-    labs(x = 'Cell Type', y = 'Log2 Fold Enrichment', title = 'Cell Neighborhood Enrichment (Relapse+/Relapse-)') + 
-    theme_bw() +
-    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
-          axis.title.x = element_blank())
+# REPLACED WITH SCRIPTS IN summary_patient_level.Rmd
 
-ggsave('Figure3C.pdf', p, device = 'pdf', width = 6, height = 4)
-
-# significance
-nbhd_proportions <- annots %>%
-  left_join(mdata[, c('Patient', 'Relapse')]) %>%
-  group_by(PointNum, Relapse) %>%
-  mutate(total_cells = n()) %>%
-  group_by(PointNum, CN, Relapse, total_cells) %>%
-  summarise(
-    count = n(),
-    proportion = count / total_cells,
-    .groups = 'drop'
-  )
-
-wilcox_results <- nbhd_proportions %>%
-  group_by(CN) %>%
-  do(test = wilcox.test(proportion ~ Relapse, data = .)) %>%
-  mutate(
-    p_value = test$p.value,
-    p_text = case_when(
-      p_value < 0.001 ~ "***",
-      p_value < 0.01 ~ "**",
-      p_value < 0.05 ~ "*",
-      TRUE ~ "ns"
-    )
-  ) %>%
-  select(CN, p_value, p_text)
-
-print(wilcox_results)
-
+# p <- annots %>%
+#   left_join(mdata[, c('Patient', 'Relapse')]) %>%
+#   group_by(path, CN, Relapse) %>%
+#   summarise(n = n(), .groups = 'drop') %>%
+#   group_by(CN, Relapse) %>%
+#   summarise(mean_n = mean(n), .groups = 'drop') %>%
+#   pivot_wider(names_from = Relapse, values_from = mean_n) %>%
+#   mutate(across(everything(), ~replace(., is.na(.), 0))) %>%
+#   pivot_longer(-c(CN), names_to = 'Relapse', values_to = 'n') %>%
+#   group_by(CN) %>%
+#   dplyr::mutate(total_n = sum(n)) %>%
+#   dplyr::mutate(diff = log2((n/total_n) / (first(n)/first(total_n)))) %>%
+#   dplyr::filter(!Relapse == 'N') %>%
+#   ggplot(aes(x = reorder(CN, diff), y = diff, fill = CN)) +
+#     geom_col() +
+#     geom_rect(aes(xmin = 0, ymin = 0, xmax = Inf, ymax = Inf), fill = 'darkorange2', alpha = 0.02) +
+#     geom_rect(aes(xmin = 0, ymin = -Inf, xmax = Inf, ymax = 0), fill = 'lightsteelblue', alpha = 0.02) +
+#     scale_fill_manual(values = nbhd_palette, guide = 'none') +
+#     annotate('text', x = 3, y = 0.5, label = 'Relapse+', size = 10) +
+#     annotate('text', x = 5, y = -0.5, label = 'Relapse-', size = 10) +
+#     labs(x = 'Cell Type', y = 'Log2 Fold Enrichment', title = 'Cell Neighborhood Enrichment (Relapse+/Relapse-)') + 
+#     theme_bw() +
+#     theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+#           axis.title.x = element_blank())
+# 
+# ggsave('Figure3C.pdf', p, device = 'pdf', width = 6, height = 4)
+# 
+# # significance
+# nbhd_proportions <- annots %>%
+#   left_join(mdata[, c('Patient', 'Relapse')]) %>%
+#   group_by(PointNum, Relapse) %>%
+#   mutate(total_cells = n()) %>%
+#   group_by(PointNum, CN, Relapse, total_cells) %>%
+#   summarise(
+#     count = n(),
+#     proportion = count / total_cells,
+#     .groups = 'drop'
+#   )
+# 
+# wilcox_results <- nbhd_proportions %>%
+#   group_by(CN) %>%
+#   do(test = wilcox.test(proportion ~ Relapse, data = .)) %>%
+#   mutate(
+#     p_value = test$p.value,
+#     p_text = case_when(
+#       p_value < 0.001 ~ "***",
+#       p_value < 0.01 ~ "**",
+#       p_value < 0.05 ~ "*",
+#       TRUE ~ "ns"
+#     )
+#   ) %>%
+#   select(CN, p_value, p_text)
+# 
+# print(wilcox_results)
 ```
 
 

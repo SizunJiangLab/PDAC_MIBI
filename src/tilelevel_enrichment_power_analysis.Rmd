@@ -1,0 +1,502 @@
+---
+title: "Summary of annots_nbhds_clean.csv - Patient Level Analysis"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(tidyverse)
+```
+
+## Load Data
+
+```{r}
+data <- read_csv("annots_nbhds_clean.csv")
+mdata <- read_csv("mdata_cleaned.csv")
+```
+
+## Select Specific Columns
+
+```{r}
+# Include spatial coordinates for sliding window analysis
+data_selected <- data %>% 
+  select(cellID, Patient, cellType, CN, path, X_cent, Y_cent)
+```
+
+## Summary of Selected Columns
+
+```{r}
+summary(data_selected)
+```
+
+## Patient Summary Table
+
+```{r}
+patient_summary <- data_selected %>%
+  group_by(Patient, CN) %>%
+  summarise(n_cells = n(), .groups = 'drop') %>%
+  arrange(Patient, CN)
+
+print(patient_summary)
+```
+
+## Merge with Metadata
+
+```{r}
+data_merged <- data_selected %>%
+  left_join(mdata, by = "Patient")
+
+head(data_merged)
+```
+
+## Summary of Merged Data
+
+```{r}
+summary(data_merged)
+```
+
+## Cell Type Count per Patient
+
+```{r}
+celltype_per_patient <- data_selected %>%
+  group_by(Patient, cellType) %>%
+  summarise(n_cells = n(), .groups = 'drop') %>%
+  arrange(Patient, cellType)
+
+print(celltype_per_patient)
+```
+
+## Cell Neighborhood (CN) Count across Patients
+
+```{r}
+cn_per_patient <- data_selected %>%
+  group_by(Patient, CN) %>%
+  summarise(n_cells = n(), .groups = 'drop') %>%
+  arrange(Patient, CN)
+
+print(cn_per_patient)
+```
+
+## Path (FOV) Summary
+
+```{r}
+# Summary of paths per relapse status
+path_relapse_summary <- data_merged %>%
+  group_by(path, Patient, Relapse) %>%
+  summarise(n_cells = n(), .groups = 'drop') %>%
+  group_by(Relapse) %>%
+  summarise(n_paths = n(), n_patients = n_distinct(Patient), .groups = 'drop')
+
+print(path_relapse_summary)
+```
+
+## Create Non-Overlapping Tile Sub-FOVs
+
+```{r}
+# Function to create non-overlapping tile sub-FOVs for each path
+create_nonoverlapping_tiles <- function(data, target_tiles = 20) {
+  # For each FOV (path), create non-overlapping tiles
+  data_with_subfovs <- data %>%
+    group_by(path) %>%
+    group_modify(~ {
+      # Get bounding box for this FOV
+      x_range <- range(.x$X_cent, na.rm = TRUE)
+      y_range <- range(.x$Y_cent, na.rm = TRUE)
+      
+      x_span <- x_range[2] - x_range[1]
+      y_span <- y_range[2] - y_range[1]
+      
+      # Calculate grid dimensions to get approximately target_tiles
+      # Maintain aspect ratio
+      n_x <- ceiling(sqrt(target_tiles * x_span / y_span))
+      n_y <- ceiling(target_tiles / n_x)
+      
+      # Calculate tile sizes (non-overlapping)
+      tile_x_size <- x_span / n_x
+      tile_y_size <- y_span / n_y
+      
+      # Assign each cell to a tile based on its coordinates
+      .x %>%
+        mutate(
+          tile_x = pmin(floor((X_cent - x_range[1]) / tile_x_size) + 1, n_x),
+          tile_y = pmin(floor((Y_cent - y_range[1]) / tile_y_size) + 1, n_y),
+          sub_fov = (tile_y - 1) * n_x + tile_x
+        ) %>%
+        select(-tile_x, -tile_y)
+    }) %>%
+    ungroup() %>%
+    # Create unique sub-FOV identifier
+    mutate(path_subfov = paste0(path, "_tile", sub_fov))
+  
+  return(data_with_subfovs)
+}
+
+# Create non-overlapping tile sub-FOVs for merged data
+data_merged_subfovs <- data_merged %>%
+  create_nonoverlapping_tiles(target_tiles = 20)
+
+# Summary of tiles created
+subfov_summary <- data_merged_subfovs %>%
+  group_by(path, Relapse) %>%
+  summarise(n_subfovs = n_distinct(path_subfov), 
+            total_cells = n(),
+            cells_per_subfov = total_cells / n_subfovs,
+            .groups = 'drop')
+
+print(subfov_summary)
+
+# Overall summary
+cat("\nOriginal FOVs:", n_distinct(data_merged$path), "\n")
+cat("Total tiles created:", n_distinct(data_merged_subfovs$path_subfov), "\n")
+cat("Total cells (no duplication):", nrow(data_merged_subfovs), "\n")
+cat("Average cells per tile:", mean(subfov_summary$cells_per_subfov), "\n")
+```
+
+## Cell Type Enrichment: Relapse vs Non-Relapse (Tile Level Analysis - Non-Overlapping)
+
+```{r}
+# Calculate log2 fold enrichment using tiles
+celltype_enrichment <- data_merged_subfovs %>%
+  group_by(path, cellType, Relapse) %>%
+  summarise(n = n(), .groups = 'drop') %>%
+  group_by(cellType, Relapse) %>%
+  summarise(mean_n = mean(n), .groups = 'drop') %>%
+  pivot_wider(names_from = Relapse, values_from = mean_n) %>%
+  mutate(across(everything(), ~replace(., is.na(.), 0))) %>%
+  pivot_longer(-c(cellType), names_to = 'Relapse', values_to = 'n') %>%
+  group_by(cellType) %>%
+  mutate(total_n = sum(n)) %>%
+  mutate(diff = log2((n/total_n) / (first(n)/first(total_n)))) %>%
+  filter(Relapse == 'Y')
+
+# Calculate proportions for statistical testing using tiles
+celltype_proportions <- data_merged_subfovs %>%
+  group_by(path_subfov, Relapse) %>%
+  mutate(total_cells = n()) %>%
+  group_by(path_subfov, cellType, Relapse, total_cells) %>%
+  summarise(
+    count = n(),
+    proportion = count / total_cells,
+    .groups = 'drop'
+  ) %>%
+  # Rename path_subfov to path for compatibility with power analysis
+  rename(path = path_subfov) %>%
+  distinct()
+
+# Wilcoxon test on proportions
+wilcox_results <- celltype_proportions %>%
+  group_by(cellType) %>%
+  do(test = wilcox.test(proportion ~ Relapse, data = .)) %>%
+  mutate(
+    p_value = test$p.value,
+    p_text = case_when(
+      p_value < 0.001 ~ "***",
+      p_value < 0.01 ~ "**",
+      p_value < 0.05 ~ "*",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  select(cellType, p_value, p_text)
+
+# Merge enrichment with p-values
+celltype_plot_data <- celltype_enrichment %>%
+  left_join(wilcox_results, by = "cellType")
+
+# Barplot
+ggplot(celltype_plot_data, aes(x = reorder(cellType, diff), y = diff)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = p_text), vjust = ifelse(celltype_plot_data$diff > 0, -0.5, 1.5), size = 5) +
+  geom_rect(aes(xmin = 0, ymin = 0, xmax = Inf, ymax = Inf), fill = 'darkorange2', alpha = 0.02) +
+  geom_rect(aes(xmin = 0, ymin = -Inf, xmax = Inf, ymax = 0), fill = 'lightsteelblue', alpha = 0.02) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Cell Type Enrichment (Relapse+/Relapse-) - Tile Level (Non-Overlapping)",
+       x = "Cell Type",
+       y = "Log2 Fold Enrichment",
+       caption = "Wilcoxon test on proportions: * p<0.05, ** p<0.01, *** p<0.001, ns = not significant") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))+
+  scale_y_continuous(limits = c(-1.2, 1.2))
+
+# Print statistics table
+print(wilcox_results)
+```
+
+## Cell Neighborhood (CN) Enrichment: Relapse vs Non-Relapse (Tile Level Analysis - Non-Overlapping)
+
+```{r}
+# Calculate log2 fold enrichment using tiles
+cn_enrichment <- data_merged_subfovs %>%
+  group_by(path, CN, Relapse) %>%
+  summarise(n = n(), .groups = 'drop') %>%
+  group_by(CN, Relapse) %>%
+  summarise(mean_n = mean(n), .groups = 'drop') %>%
+  pivot_wider(names_from = Relapse, values_from = mean_n) %>%
+  mutate(across(everything(), ~replace(., is.na(.), 0))) %>%
+  pivot_longer(-c(CN), names_to = 'Relapse', values_to = 'n') %>%
+  group_by(CN) %>%
+  mutate(total_n = sum(n)) %>%
+  mutate(diff = log2((n/total_n) / (first(n)/first(total_n)))) %>%
+  filter(Relapse == 'Y')
+
+# Calculate proportions for statistical testing using tiles
+cn_proportions <- data_merged_subfovs %>%
+  group_by(path_subfov, Relapse) %>%
+  mutate(total_cells = n()) %>%
+  group_by(path_subfov, CN, Relapse, total_cells) %>%
+  summarise(
+    count = n(),
+    proportion = count / total_cells,
+    .groups = 'drop'
+  ) %>%
+  # Rename path_subfov to path for compatibility with power analysis
+  rename(path = path_subfov) %>%
+  distinct()
+
+# Wilcoxon test on proportions
+wilcox_results_cn <- cn_proportions %>%
+  group_by(CN) %>%
+  do(test = wilcox.test(proportion ~ Relapse, data = .)) %>%
+  mutate(
+    p_value = test$p.value,
+    p_text = case_when(
+      p_value < 0.001 ~ "***",
+      p_value < 0.01 ~ "**",
+      p_value < 0.05 ~ "*",
+      TRUE ~ "ns"
+    )
+  ) %>%
+  select(CN, p_value, p_text)
+
+# Merge enrichment with p-values
+cn_plot_data <- cn_enrichment %>%
+  left_join(wilcox_results_cn, by = "CN")
+
+# Barplot
+ggplot(cn_plot_data, aes(x = reorder(CN, diff), y = diff)) +
+  geom_col(fill = "coral") +
+  geom_text(aes(label = p_text), vjust = ifelse(cn_plot_data$diff > 0, -0.5, 1.5), size = 5) +
+  geom_rect(aes(xmin = 0, ymin = 0, xmax = Inf, ymax = Inf), fill = 'darkorange2', alpha = 0.02) +
+  geom_rect(aes(xmin = 0, ymin = -Inf, xmax = Inf, ymax = 0), fill = 'lightsteelblue', alpha = 0.02) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  labs(title = "Cell Neighborhood Enrichment (Relapse+/Relapse-) - Tile Level (Non-Overlapping)",
+       x = "Cell Neighborhood (CN)",
+       y = "Log2 Fold Enrichment",
+       caption = "Wilcoxon test on proportions: * p<0.05, ** p<0.01, *** p<0.001, ns = not significant") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1))+
+  scale_y_continuous(limits = c(-1, 2.5))
+
+# Print statistics table
+print(wilcox_results_cn)
+```
+
+## Empirical Power Analysis for Cell Types (Tile Level Simulation)
+
+**Purpose:** To evaluate whether the current dataset with non-overlapping tiles (38 original FOVs × ~20 tiles per FOV ≈ 760 tiles) provides sufficient statistical power and to determine the robustness of the relapse vs. non-relapse differences.
+
+**Method:** This section performs a stratified subsampling analysis using the non-overlapping tiles created above. Each tile is independent (no shared cells), which satisfies statistical independence assumptions. At each iteration, a fixed number of tiles is randomly dropped from EACH relapse group (both relapse and non-relapse). The analysis tests dropping different numbers of tiles to assess how robust the statistical findings are. A Wilcoxon rank-sum test is computed for each cell type. Empirical power is defined as the proportion of iterations where p < 0.05, reflecting the probability of detecting a significant difference under the current data distribution.
+
+This simulation-based (empirical) power analysis has been used in previous spatial and single-cell studies, where analytical power formulas are not applicable due to spatial correlation and hierarchical sampling structures (see Gut et al., Nat Methods 2023; Baker et al., Power analysis for spatial omics).
+
+```{r, warning=FALSE, fig.width=14, fig.height=10}
+# Function: stratified downsampling by dropping fixed number of tiles
+run_subsampling_power_ct <- function(data, n_drop = 1, n_iter = 200) {
+  # data: data frame with columns path, Relapse, cellType, proportion
+  # n_drop: number of tiles to drop from EACH relapse group
+  # n_iter: number of random subsampling iterations
+  
+  all_celltypes <- unique(data$cellType)
+  
+  set.seed(123)
+  map_dfr(seq_len(n_iter), function(i) {
+    # Drop n_drop tiles from each relapse group
+    path_by_relapse <- data %>%
+      distinct(path, Relapse)
+    
+    sampled_paths <- path_by_relapse %>%
+      group_by(Relapse) %>%
+      group_split() %>%
+      map_dfr(function(group_data) {
+        n_total <- nrow(group_data)
+        n_keep <- max(1, n_total - n_drop)
+        group_data %>% slice_sample(n = n_keep, replace = FALSE)
+      }) %>%
+      pull(path)
+    
+    sampled <- data %>% filter(path %in% sampled_paths)
+    
+    # Compute Wilcoxon tests per cell type
+    res <- map_dfr(all_celltypes, function(ct) {
+      ct_data <- sampled %>% filter(cellType == ct)
+      # Check if we have data for both relapse groups
+      if (nrow(ct_data) < 2 || length(unique(ct_data$Relapse)) < 2) {
+        tibble(cellType = ct, p_value = NA_real_)
+      } else {
+        wt <- tryCatch(wilcox.test(proportion ~ Relapse, data = ct_data),
+                       error = function(e) NULL)
+        tibble(cellType = ct, p_value = if (is.null(wt)) NA_real_ else wt$p.value)
+      }
+    }) %>%
+      mutate(iter = i, n_drop = n_drop)
+    
+    return(res)
+  })
+}
+
+# Run subsampling analysis by dropping 1 to 500 tiles (by 50) from each group
+n_drops <- seq(from= 1, to = 500, by =50)
+downsample_results_ct <- map_dfr(n_drops, ~run_subsampling_power_ct(celltype_proportions, n_drop = .x, n_iter = 200))
+
+# Summarize empirical power and stability with 95% CI
+empirical_power_summary_ct <- downsample_results_ct %>%
+  group_by(cellType, n_drop) %>%
+  summarise(
+    n_tests = sum(!is.na(p_value)),
+    n_significant = sum(p_value < 0.05, na.rm = TRUE),
+    empirical_power = mean(p_value < 0.05, na.rm = TRUE),
+    median_logp = median(-log10(p_value), na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    # 95% CI using binomial proportion (Wilson score interval)
+    ci_lower = pmax(0, empirical_power - 1.96 * sqrt(empirical_power * (1 - empirical_power) / n_tests)),
+    ci_upper = pmin(1, empirical_power + 1.96 * sqrt(empirical_power * (1 - empirical_power) / n_tests))
+  )
+
+# Visualization - separate plot for each cell type with 95% CI
+ggplot(empirical_power_summary_ct, aes(x = n_drop, y = empirical_power)) +
+  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper), fill = "steelblue", alpha = 0.2) +
+  geom_line(color = "steelblue", size = 1.1) +
+  geom_point(color = "steelblue", size = 2.5) +
+  geom_hline(yintercept = 0.8, linetype = "dashed", color = "red", alpha = 0.5) +
+  scale_x_continuous(breaks = n_drops) +
+  scale_y_continuous(limits = c(0, 1), labels = scales::percent_format()) +
+  facet_wrap(~ cellType, scales = "free_y") +
+  labs(title = "Empirical Power for Cell Types: Dropping Tiles from Each Relapse Group",
+       subtitle = "Each panel shows the probability (empirical power) of obtaining p < 0.05 for a given cell type. Shaded area = 95% CI. Red dashed line = 80% power threshold.",
+       x = "Number of Tiles Dropped from Each Group",
+       y = "Empirical Power (p < 0.05)",
+       caption = "Simulation-based power analysis (200 iterations per drop level). Equal numbers of tiles dropped from relapse and non-relapse groups.") +
+  theme_bw(base_size = 11) +
+  theme(plot.title = element_text(face = "bold"),
+        plot.subtitle = element_text(size = 9),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        strip.background = element_rect(fill = "lightblue"),
+        strip.text = element_text(face = "bold"))
+
+# Print summary table
+print(empirical_power_summary_ct)
+```
+
+**Interpretation:**
+
+- Empirical power represents the proportion of resampling iterations where the Wilcoxon test detects a significant difference (p < 0.05). It quantifies the stability and reproducibility of the observed relapse vs. non-relapse differences under reduced sampling.
+- A stable empirical power (≥0.8) when dropping small numbers of tiles indicates that the non-overlapping tile approach with ~760 tiles provides sufficient data for robust inference.
+- The power curve shows how statistical power degrades as more tiles are dropped from each group, helping identify the robustness of the detected relapse-associated differences.
+- Using non-overlapping tiles increases sample size while maintaining statistical independence (no pseudo-replication), providing more power compared to using only 38 original FOVs.
+
+## Empirical Power Analysis for Cell Neighborhoods (Tile Level Simulation)
+
+**Purpose:** Similar to the cell type analysis above, this section evaluates the statistical power for detecting relapse vs. non-relapse differences in cell neighborhood (CN) composition across the non-overlapping tiles.
+
+**Method:** Stratified subsampling analysis where a fixed number of tiles is randomly dropped from EACH relapse group (both relapse and non-relapse), followed by Wilcoxon rank-sum testing for each cell neighborhood.
+
+```{r, warning=FALSE, fig.width=14, fig.height=10}
+# Function: stratified downsampling by dropping fixed number of tiles for CN
+run_subsampling_power_cn <- function(data, n_drop = 1, n_iter = 200) {
+  # data: data frame with columns path, Relapse, CN, proportion
+  # n_drop: number of tiles to drop from EACH relapse group
+  # n_iter: number of random subsampling iterations
+  
+  # Get all unique cell neighborhoods to ensure they are all tested
+  all_cns <- unique(data$CN)
+  
+  set.seed(123)
+  map_dfr(seq_len(n_iter), function(i) {
+    
+    # Drop n_drop tiles from each relapse group
+    path_by_relapse <- data %>%
+      distinct(path, Relapse)
+    
+    sampled_paths <- path_by_relapse %>%
+      group_by(Relapse) %>%
+      group_split() %>%
+      map_dfr(function(group_data) {
+        n_total <- nrow(group_data)
+        n_keep <- max(1, n_total - n_drop)
+        group_data %>% slice_sample(n = n_keep, replace = FALSE)
+      }) %>%
+      pull(path)
+    
+    sampled <- data %>% filter(path %in% sampled_paths)
+    
+    # Compute Wilcoxon tests per CN
+    # Ensure all CNs are represented in results
+    res <- map_dfr(all_cns, function(cn) {
+      cn_data <- sampled %>% filter(CN == cn)
+      # Check if we have data for both relapse groups
+      if (nrow(cn_data) < 2 || length(unique(cn_data$Relapse)) < 2) {
+        tibble(CN = cn, p_value = NA_real_)
+      } else {
+        wt <- tryCatch(wilcox.test(proportion ~ Relapse, data = cn_data),
+                       error = function(e) NULL)
+        tibble(CN = cn, p_value = if (is.null(wt)) NA_real_ else wt$p.value)
+      }
+    }) %>%
+      mutate(iter = i, n_drop = n_drop)
+    
+    return(res)
+  })
+}
+
+# Run subsampling analysis by dropping 1 to 500 tiles (by 50) from each group
+downsample_results_cn <- map_dfr(n_drops, ~run_subsampling_power_cn(cn_proportions, n_drop = .x, n_iter = 200))
+
+# Summarize empirical power and stability with 95% CI
+empirical_power_summary_cn <- downsample_results_cn %>%
+  group_by(CN, n_drop) %>%
+  summarise(
+    n_tests = sum(!is.na(p_value)),
+    n_significant = sum(p_value < 0.05, na.rm = TRUE),
+    empirical_power = mean(p_value < 0.05, na.rm = TRUE),
+    median_logp = median(-log10(p_value), na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    # 95% CI using binomial proportion (Wilson score interval)
+    ci_lower = pmax(0, empirical_power - 1.96 * sqrt(empirical_power * (1 - empirical_power) / n_tests)),
+    ci_upper = pmin(1, empirical_power + 1.96 * sqrt(empirical_power * (1 - empirical_power) / n_tests))
+  )
+
+# Visualization - separate plot for each cell neighborhood with 95% CI
+ggplot(empirical_power_summary_cn, aes(x = n_drop, y = empirical_power)) +
+  geom_ribbon(aes(ymin = ci_lower, ymax = ci_upper), fill = "coral", alpha = 0.2) +
+  geom_line(color = "coral", size = 1.1) +
+  geom_point(color = "coral", size = 2.5) +
+  geom_hline(yintercept = 0.8, linetype = "dashed", color = "red", alpha = 0.5) +
+  scale_x_continuous(breaks = n_drops) +
+  scale_y_continuous(limits = c(0, 1), labels = scales::percent_format()) +
+  facet_wrap(~ CN, scales = "free_y") +
+  labs(title = "Empirical Power for Cell Neighborhoods: Dropping Tiles from Each Relapse Group",
+       subtitle = "Each panel shows the probability (empirical power) of obtaining p < 0.05 for a given cell neighborhood. Shaded area = 95% CI. Red dashed line = 80% power threshold.",
+       x = "Number of Tiles Dropped from Each Group",
+       y = "Empirical Power (p < 0.05)",
+       caption = "Simulation-based power analysis (200 iterations per drop level). Equal numbers of tiles dropped from relapse and non-relapse groups.") +
+  theme_bw(base_size = 11) +
+  theme(plot.title = element_text(face = "bold"),
+        plot.subtitle = element_text(size = 9),
+        strip.background = element_rect(fill = "lightcoral"),
+        axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+        strip.text = element_text(face = "bold"))w i
+
+# Print summary table
+print(empirical_power_summary_cn)
+```
+
+**Interpretation:**
+
+- Empirical power for cell neighborhoods quantifies how robustly we can detect relapse-associated spatial organization patterns under varying sample sizes.
+- Cell neighborhoods with consistently high empirical power (≥0.8) when dropping small numbers of tiles represent stable and reproducible spatial features associated with relapse status.
+- The power curve for each neighborhood reveals its robustness, showing how sensitive the statistical inference is to the removal of tiles from the dataset.
+- The non-overlapping tile approach with ~760 tiles provides higher resolution and more statistical power for detecting spatial patterns compared to 38 original FOVs, while maintaining proper statistical independence.
+
